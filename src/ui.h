@@ -27,12 +27,14 @@ extern Switches c_btn;
 // ============================================================
 // Display modes — cycle with UP/DOWN buttons
 // ============================================================
-#define STATS_NEW    0  // New large-format stats screen (Screen 1)
-#define FULL_STATS   1  // Original stats screen (Screen 2)
-#define SD_FILES     2  // SD file menu
-#define INCOGNITO    3  // Blank screen (Screen 3)
+#define STATS_NEW    0
+#define FULL_STATS   1
+#define SD_FILES     2
+#define INCOGNITO    3
 
 #define MAX_DISPLAY_MODES 4
+
+#define FLOCK_ALERT_DURATION_MS  5000
 
 struct MenuNode {
   String name;
@@ -61,13 +63,16 @@ class UI {
 
     uint32_t init_time;
     uint32_t lastUpdateTime         = 0;
-    uint32_t last_mode_change_ms    = 0; // debounce rapid button pushes
-    uint8_t  last_stat_display_mode = 255; // forces clear on first draw
+    uint32_t last_mode_change_ms    = 0;
+    uint8_t  last_stat_display_mode = 255;
 
-    // Incognito countdown state
     bool     incognito_counting = false;
     uint32_t incognito_start_ms = 0;
     int      incognito_last_sec = -1;
+
+    bool     flock_alert_showing  = false;
+    uint32_t flock_alert_start_ms = 0;
+    int      flock_alert_last_sec = -1;
 
     void printFirmwareVersion();
     void printBatteryLevel(int8_t batteryLevel);
@@ -77,6 +82,7 @@ class UI {
                      uint32_t count5g, uint32_t bleCount, int gpsSats,
                      int8_t batteryLevel, bool do_now = false);
     void setDisplayMode(uint8_t new_mode);
+    void drawFlockAlert(uint32_t currentTime);
     void addNodes(Menu * menu, String name, uint8_t color, Menu * child, int place,
                   std::function<void()> callable, uint32_t size = 0,
                   bool selected = false, String command = "");

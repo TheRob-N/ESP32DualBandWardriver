@@ -8,23 +8,30 @@ void UI::begin() {
 
   mode_menu.name   = "Mode";
   action_menu.name = "Action";
-  upload_menu.name = "Upload";
 
   this->buildSDFileMenu();
 
   action_menu.parentMenu = &sd_file_menu;
   mode_menu.parentMenu   = &sd_file_menu;
-  upload_menu.parentMenu = &action_menu;  // Upload is a submenu of Action
+  upload_menu.parentMenu = &sd_file_menu;
 
   this->addNodes(&action_menu, "Back", ST77XX_WHITE, NULL, 0, [this]() {
     this->current_menu = action_menu.parentMenu;
   });
-
-  // Upload opens submenu
   this->addNodes(&action_menu, "Upload", ST77XX_WHITE, NULL, 0, [this]() {
-    this->current_menu = &upload_menu;
+    if (wifi_ops.tryConnectToWiFi()) {
+      delay(1000);
+      if (wifi_ops.backendUpload("/" + sd_obj.selected_file_name)) {
+        display.clearScreen();
+        display.drawCenteredText("Upload complete", true);
+        buffer.setFileName("");
+      }
+    }
+    wifi_ops.deinitWiFi();
+    delay(10);
+    wifi_ops.initWiFi();
+    delay(2000);
   });
-
   this->addNodes(&action_menu, "Delete", ST77XX_WHITE, NULL, 0, [this]() {
     if ("/" + sd_obj.selected_file_name == buffer.getFileName())
       buffer.setFileName("");
@@ -41,62 +48,6 @@ void UI::begin() {
     delay(2000);
     this->buildSDFileMenu();
     this->current_menu = &sd_file_menu;
-  });
-
-  // Upload Menu
-  this->addNodes(&upload_menu, "Back", ST77XX_WHITE, NULL, 0, [this]() {
-    this->current_menu = upload_menu.parentMenu;
-  });
-  this->addNodes(&upload_menu, "WiGLE", ST77XX_WHITE, NULL, 0, [this]() {
-    if (wifi_ops.tryConnectToWiFi()) {
-      delay(1000);
-      if (wifi_ops.backendUpload("/" + sd_obj.selected_file_name, WIGLE_UPLOAD)) {
-        display.clearScreen();
-        display.drawCenteredText("WiGLE OK", true);
-      } else {
-        display.clearScreen();
-        display.drawCenteredText("WiGLE failed", true);
-      }
-    }
-    wifi_ops.deinitWiFi();
-    delay(10);
-    wifi_ops.initWiFi();
-    delay(2000);
-    this->current_menu = upload_menu.parentMenu;
-  });
-  this->addNodes(&upload_menu, "WDGWars", ST77XX_WHITE, NULL, 0, [this]() {
-    if (wifi_ops.tryConnectToWiFi()) {
-      delay(1000);
-      if (wifi_ops.backendUpload("/" + sd_obj.selected_file_name, WDG_UPLOAD)) {
-        display.clearScreen();
-        display.drawCenteredText("WDG OK", true);
-      } else {
-        display.clearScreen();
-        display.drawCenteredText("WDG failed", true);
-      }
-    }
-    wifi_ops.deinitWiFi();
-    delay(10);
-    wifi_ops.initWiFi();
-    delay(2000);
-    this->current_menu = upload_menu.parentMenu;
-  });
-  this->addNodes(&upload_menu, "Both", ST77XX_WHITE, NULL, 0, [this]() {
-    if (wifi_ops.tryConnectToWiFi()) {
-      delay(1000);
-      if (wifi_ops.backendUpload("/" + sd_obj.selected_file_name, BOTH_UPLOAD)) {
-        display.clearScreen();
-        display.drawCenteredText("Upload OK", true);
-      } else {
-        display.clearScreen();
-        display.drawCenteredText("Upload failed", true);
-      }
-    }
-    wifi_ops.deinitWiFi();
-    delay(10);
-    wifi_ops.initWiFi();
-    delay(2000);
-    this->current_menu = upload_menu.parentMenu;
   });
 
   // Mode Menu
@@ -126,7 +77,6 @@ void UI::begin() {
     wifi_ops.startESPNow();
     delay(2000);
   });
-
 
   this->current_menu = &sd_file_menu;
   this->init_time    = millis();
@@ -237,6 +187,19 @@ void UI::drawStatsNew(uint32_t currentTime, uint32_t count2g4, uint32_t count5g,
   display.tft->setTextColor(statusColor, ST77XX_BLACK);
   display.tft->print(statusStr);
 
+  // ---- Row 2 left: geofence label or blank (clears IP bleed from admin phase) ----
+  display.tft->setCursor(0, 9);
+  display.tft->setTextSize(1);
+  if (wifi_ops.in_geofence && wifi_ops.current_geo_label.length() > 0) {
+    display.tft->setTextColor(ST77XX_GREEN, ST77XX_BLACK);
+    String lbl = wifi_ops.current_geo_label;
+    while (lbl.length() < 16) lbl += " ";
+    display.tft->print(lbl.substring(0, 16));
+  } else {
+    display.tft->setTextColor(ST77XX_BLACK, ST77XX_BLACK);
+    display.tft->print("                ");
+  }
+
   // ---- Divider ----
   display.tft->drawFastHLine(0, 19, TFT_WIDTH, 0x4208);
 
@@ -300,20 +263,75 @@ void UI::drawStatsNew(uint32_t currentTime, uint32_t count2g4, uint32_t count5g,
   display.tft->setTextColor(0xF81F, ST77XX_BLACK);
   display.tft->print(totalBLE);
 
-  // ---- Geofence label (size 1, bottom row) ----
+  // ---- Geofence label + NO SD CARD + Flock count (bottom row) ----
   display.tft->setTextSize(1);
   display.tft->setCursor(0, 71);
   if (!sd_obj.supported) {
     display.tft->setTextColor(ST77XX_RED, ST77XX_BLACK);
-    display.tft->print("NO SD CARD                ");
+    display.tft->print("NO SD CARD        ");
   } else if (wifi_ops.in_geofence && wifi_ops.current_geo_label.length() > 0) {
     display.tft->setTextColor(ST77XX_YELLOW, ST77XX_BLACK);
     String geo = "GEO: " + wifi_ops.current_geo_label;
-    while (geo.length() < 26) geo += " ";
+    while (geo.length() < 16) geo += " ";
     display.tft->print(geo);
   } else {
     display.tft->setTextColor(ST77XX_BLACK, ST77XX_BLACK);
-    display.tft->print("                          ");
+    display.tft->print("                ");
+  }
+
+  // F: count — always shown under B:, right side of bottom row
+  display.tft->setTextSize(2);
+  display.tft->setCursor(TFT_WIDTH / 2, 65);
+  display.tft->setTextColor(0x7BEF, ST77XX_BLACK);
+  display.tft->print("F:");
+  if (wifi_ops.flock_count > 0) {
+    display.tft->setTextColor(0xF800, ST77XX_BLACK);
+  } else {
+    display.tft->setTextColor(ST77XX_WHITE, ST77XX_BLACK);
+  }
+  display.tft->print(String(wifi_ops.flock_count) + "  ");
+}
+
+
+
+// ============================================================
+// Flock Safety alert overlay — red full-screen for 5 seconds
+// ============================================================
+void UI::drawFlockAlert(uint32_t currentTime) {
+  uint32_t elapsed  = currentTime - this->flock_alert_start_ms;
+  int      secs_rem = (elapsed < FLOCK_ALERT_DURATION_MS)
+                        ? (int)((FLOCK_ALERT_DURATION_MS - elapsed) / 1000) + 1
+                        : 0;
+
+  if (secs_rem != this->flock_alert_last_sec) {
+    this->flock_alert_last_sec = secs_rem;
+
+    // Full red background
+    display.tft->fillScreen(ST77XX_RED);
+    display.tft->setTextWrap(false);
+
+    // "FLOCK ALERT" — large, black, centered
+    display.tft->setTextSize(2);
+    display.tft->setTextColor(ST77XX_BLACK, ST77XX_RED);
+    uint16_t lblW = 11 * 12; // 11 chars x 12px (size 2)
+    display.tft->setCursor((TFT_WIDTH - lblW) / 2, 20);
+    display.tft->print("FLOCK ALERT");
+
+    // Detection type
+    display.tft->setTextSize(1);
+    display.tft->setTextColor(ST77XX_BLACK, ST77XX_RED);
+    String typeStr = "via " + wifi_ops.flock_last_type;
+    uint16_t typeW = typeStr.length() * 6;
+    display.tft->setCursor((TFT_WIDTH - typeW) / 2, 44);
+    display.tft->print(typeStr);
+
+    // Countdown
+    char buf[24];
+    snprintf(buf, sizeof(buf), "dismissing in %ds...", secs_rem);
+    String cdStr(buf);
+    uint16_t cdW = cdStr.length() * 6;
+    display.tft->setCursor((TFT_WIDTH - cdW) / 2, 60);
+    display.tft->print(cdStr);
   }
 }
 
@@ -346,8 +364,6 @@ void UI::updateStats(uint32_t currentTime, uint32_t wifiCount, uint32_t count2g4
 
   if (sd_obj.supported)
     display.tft->println("File: " + buffer.getFileName() + "   ");
-  if (wifi_ops.run_mode == CORE_MODE)
-    display.tft->println("Nodes: " + String(wifi_ops.getNodeCount()) + "   ");
 
   display.tft->println();
 
@@ -522,6 +538,33 @@ void UI::main(uint32_t currentTime) {
   // Don't draw stats while docked — dock mode manages its own display
   if (wifi_ops.isDocked())
     return;
+
+  // ---- Flock alert overlay ----
+  if (wifi_ops.flock_detected) {
+    if (!this->flock_alert_showing) {
+      // New detection — start alert
+      this->flock_alert_showing  = true;
+      this->flock_alert_start_ms = currentTime;
+      this->flock_alert_last_sec = -1;
+      display.tft->setRotation(3);
+    }
+    // Reset timer on each new detection while alert is showing
+    wifi_ops.flock_detected = false;
+  }
+
+  if (this->flock_alert_showing) {
+    uint32_t elapsed = currentTime - this->flock_alert_start_ms;
+    if (elapsed < FLOCK_ALERT_DURATION_MS) {
+      this->drawFlockAlert(currentTime);
+      return; // hold screen — suppress all other drawing
+    } else {
+      // Alert expired — restore display
+      this->flock_alert_showing  = false;
+      this->flock_alert_last_sec = -1;
+      this->last_stat_display_mode = 255; // force redraw
+      this->lastUpdateTime = 0;
+    }
+  }
 
   bool in_stats = (this->stat_display_mode != SD_FILES);
 

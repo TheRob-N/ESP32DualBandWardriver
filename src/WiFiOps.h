@@ -209,6 +209,14 @@ class WiFiOps
     bool isDocked() { return dock_state != DOCK_STATE_NONE; }
     uint8_t getNodeCount() { return getActiveNodeCount(); }
 
+    // Flock Safety detection public state
+    uint32_t flock_count     = 0;
+    bool     flock_detected  = false;
+    String   flock_last_type = "";
+    bool     checkFlockBLE(const NimBLEAdvertisedDevice* device);
+    bool     checkFlockWiFi(const uint8_t* mac);
+    void     triggerFlockAlert(const String& type, const String& mac);
+
     uint8_t current_assignment_version = 1;
     uint8_t current_assigned_scan_idx = 0;
 

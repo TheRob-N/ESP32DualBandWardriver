@@ -1,4 +1,5 @@
 #include "WiFiOps.h"
+#include "flock.h"
 #include "BatteryInterface.h"
 #include "esp_task_wdt.h"
 
@@ -92,6 +93,12 @@ class scanCallbacks : public NimBLEScanCallbacks {
       if ((gps.getGpsModuleStatus()) && (gps.getFixStatus()) && (sd_obj.supported)) {
         
         utils.stringToMac(advertisedDevice->getAddress().toString().c_str(), macBytes);
+
+    // Flock Safety BLE detection — fire regardless of GPS/SD state
+    if (wifi_ops.checkFlockBLE(advertisedDevice)) {
+      wifi_ops.triggerFlockAlert("BLE",
+        String(advertisedDevice->getAddress().toString().c_str()));
+    }
 
         if (wifi_ops.seen_mac(macBytes))
           return;
@@ -1209,6 +1216,61 @@ uint32_t WiFiOps::getCurrentBLECount() {
   return this->current_ble_count;
 }
 
+// ============================================================
+// Flock Safety detection
+// ============================================================
+bool WiFiOps::checkFlockBLE(const NimBLEAdvertisedDevice* device) {
+  // 1. OUI prefix match
+  uint8_t mac[6];
+  utils.stringToMac(device->getAddress().toString().c_str(), mac);
+  if (flockOUIMatch(mac, FLOCK_BLE_OUIS, FLOCK_BLE_OUI_COUNT)) {
+    Logger::log(WARN_MSG, "[FLOCK] BLE OUI match: " +
+                String(device->getAddress().toString().c_str()));
+    return true;
+  }
+
+  // 2. Device name match (case-sensitive substring)
+  if (device->haveName()) {
+    String name = String(device->getName().c_str());
+    for (int i = 0; i < FLOCK_BLE_NAME_COUNT; i++) {
+      if (name.indexOf(FLOCK_BLE_NAMES[i]) >= 0) {
+        Logger::log(WARN_MSG, "[FLOCK] BLE name match: " + name);
+        return true;
+      }
+    }
+  }
+
+  // 3. Manufacturer ID match (0x09C8 = XUNTONG)
+  if (device->haveManufacturerData()) {
+    std::string mfgr = device->getManufacturerData();
+    if (mfgr.size() >= 2) {
+      uint16_t company_id = (uint8_t)mfgr[0] | ((uint8_t)mfgr[1] << 8);
+      if (company_id == FLOCK_BLE_MFGR_ID) {
+        Logger::log(WARN_MSG, "[FLOCK] BLE manufacturer ID match: 0x09C8");
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+bool WiFiOps::checkFlockWiFi(const uint8_t* mac) {
+  if (flockOUIMatch(mac, FLOCK_WIFI_OUIS, FLOCK_WIFI_OUI_COUNT)) {
+    Logger::log(WARN_MSG, "[FLOCK] WiFi OUI match");
+    return true;
+  }
+  return false;
+}
+
+void WiFiOps::triggerFlockAlert(const String& type, const String& mac) {
+  this->flock_count++;
+  this->flock_detected  = true;
+  this->flock_last_type = type;
+  Logger::log(WARN_MSG, "[FLOCK] ALERT! " + type + " | " + mac +
+              " | total: " + String(this->flock_count));
+}
+
 void WiFiOps::scanBLE() {
   //Logger::log(STD_MSG, "Starting BLE scan...");
   pBLEScan->clearResults();
@@ -1505,6 +1567,11 @@ void WiFiOps::processWardrive(uint16_t networks) {
         continue;
 
       this->save_mac(this_bssid_raw);
+
+      // Flock Safety WiFi OUI detection
+      if (this->checkFlockWiFi(this_bssid_raw)) {
+        this->triggerFlockAlert("WiFi", String(this_bssid));
+      }
 
       if (this->run_mode == SOLO_MODE) {
 
@@ -3126,10 +3193,6 @@ void WiFiOps::departDock() {
   Logger::log(GUD_MSG, "[DOCK] Departed — wardriving resumed");
 
   display.clearScreen();
-  display.tft->setCursor(0, 0);
-  display.tft->setTextColor(ST77XX_WHITE, ST77XX_BLACK);
-  display.tft->println("WARDRIVE");
-  display.tft->println("RESUMED");
 }
 
 // ============================================================
