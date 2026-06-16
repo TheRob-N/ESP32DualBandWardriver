@@ -1935,143 +1935,6 @@ void WiFiOps::startAccessPoint() {
   display.tft->println(WiFi.softAPIP().toString());
 }
 
-bool WiFiOps::backendUpload(String filePath, uint8_t upload_type) {
-  //server.begin();
-  display.clearScreen();
-  display.drawCenteredText("Uploading to WDGWars...", true);
-
-  String apiKey = settings.loadSetting<String>("wdg");
-
-  if (apiKey.isEmpty()) {
-    fileToUpload.close();
-    display.clearScreen();
-    display.drawCenteredText("No WDGWars key", true);
-    Logger::log(WARN_MSG, "Missing WDGWars API key");
-    return false;
-  }
-
-  Logger::log(STD_MSG, "Uploading to WDGWars");
-
-  String boundary = "----ESP32WDGWARSBOUNDARY";
-  String contentType = "multipart/form-data; boundary=" + boundary;
-
-  // Build multipart body pieces
-  String part1 = "--" + boundary + "\r\n";
-  part1 += "Content-Disposition: form-data; name=\"file\"; filename=\"" + filePath + "\"\r\n";
-  part1 += "Content-Type: application/octet-stream\r\n\r\n";
-
-  String part2 = "\r\n--" + boundary + "--\r\n";
-
-  int totalLength = part1.length() + fileToUpload.size() + part2.length();
-
-  Logger::log(STD_MSG, "part1.length(): " + String(part1.length()));
-  Logger::log(STD_MSG, "fileToUpload.size(): " + String(fileToUpload.size()));
-  Logger::log(STD_MSG, "part2.length(): " + String(part2.length()));
-  Logger::log(STD_MSG, "Total Content-Length: " + String(totalLength));
-
-  client->setInsecure();
-
-  if (!client->connect("wdgwars.pl", 443)) {
-    fileToUpload.close();
-    client->stop();
-    display.clearScreen();
-    display.drawCenteredText("Could not connect", true);
-    Logger::log(WARN_MSG, "Failed to connect to wdgwars.pl");
-    return false;
-  }
-
-  Serial.println("Connected to WDGWars");
-
-  // Headers
-  client->println("POST /api/v2/upload-csv HTTP/1.1");
-  client->println("Host: wdgwars.pl");
-  client->println("User-Agent: ESP32Marauder/1.0");
-  client->println("Accept: application/json");
-  client->println("X-API-Key: " + apiKey);
-  client->println("Content-Type: " + contentType);
-  client->print("Content-Length: ");
-  client->println(totalLength);
-  client->println();
-
-  delay(100);
-
-  Serial.println("Finished sending WDGWars headers");
-
-  // Send multipart body
-  client->print(part1);
-
-  const size_t BUFFER_SIZE = 4096;
-  uint8_t buffer[BUFFER_SIZE];
-
-  size_t totalBytesSent = 0;
-  uint8_t percent_sent = 0;
-  String display_percent = "";
-
-  while (fileToUpload.available()) {
-    size_t bytesRead = fileToUpload.read(buffer, BUFFER_SIZE);
-
-    if (bytesRead == 0)
-      break;
-
-    client->write(buffer, bytesRead);
-
-    totalBytesSent += bytesRead;
-
-    Serial.print("Writing ");
-    Serial.print(totalBytesSent);
-    Serial.println(" bytes...");
-
-    percent_sent = (totalBytesSent * 100) / fileToUpload.size();
-
-    display.tft->drawRect(0, (TFT_HEIGHT / 3) * 2, TFT_WIDTH, TFT_HEIGHT, ST77XX_BLACK);
-    display.tft->setCursor(0, (TFT_HEIGHT / 3) * 2);
-
-    display_percent = String(percent_sent) + "%";
-    display.drawCenteredText(display_percent, false);
-  }
-
-  Logger::log(STD_MSG, "Uploaded WDGWars file bytes: " + String(totalBytesSent));
-
-  client->print(part2);
-
-  Serial.println("Finished sending WDGWars body");
-
-  fileToUpload.close();
-
-  // Read response
-  String response;
-  unsigned long timeout = millis();
-
-  while (millis() - timeout < 5000) {
-    while (client->available()) {
-      char c = client->read();
-      response += c;
-    }
-
-    if (!client->connected() && !client->available())
-      break;
-  }
-
-  if (millis() - timeout >= 5000)
-    Logger::log(WARN_MSG, "WDGWars response timeout");
-
-  if (!client->connected())
-    Logger::log(WARN_MSG, "WDGWars client disconnected");
-
-  client->stop();
-
-  Serial.println("WDGWars response:");
-  Serial.println(response);
-
-  if (response.indexOf("202 Accepted") >= 0 || response.indexOf("\"ok\":true") >= 0) {
-    Logger::log(STD_MSG, "WDGWars upload accepted");
-    return true;
-  }
-
-  Logger::log(WARN_MSG, "WDGWars upload may have failed");
-  return false;
-}
-
 bool WiFiOps::uploadToWigle(String filePath, File fileToUpload) {
   Logger::log(STD_MSG, "Uploading to WiGLE...");
   display.clearScreen();
@@ -2207,66 +2070,43 @@ bool WiFiOps::uploadToWigle(String filePath, File fileToUpload) {
 }
 
 bool WiFiOps::backendUpload(String filePath, uint8_t upload_type) {
-  bool wdg_status = true;
-  bool wigle_status = true;
   display.clearScreen();
-  if (upload_type == BOTH_UPLOAD) {
-    display.clearScreen();
-    display.drawCenteredText("Uploading to both...", true);
-  }
+  if (upload_type == WIGLE_UPLOAD)
+    display.drawCenteredText("WiGLE Uploading...", true);
+  else if (upload_type == BOTH_UPLOAD)
+    display.drawCenteredText("Uploading Both...", true);
+  else
+    display.drawCenteredText("Uploading...", true);
 
-  delay(1000);
+  delay(100);
 
   if (!SD.exists(filePath)) {
-      display.clearScreen();
-      display.drawCenteredText(filePath + " not found", true);
-      Logger::log(WARN_MSG, "File does not exist: " + filePath);
-      return false;
-    }
-
-    File fileToUpload = SD.open(filePath);
-    if (!fileToUpload) {
-      display.clearScreen();
-      display.drawCenteredText("Could not open file", true);
-      Logger::log(WARN_MSG, "Could not open file: " + filePath);
-      return false;
-    }
-
-    if ((upload_type == WDG_UPLOAD) || (upload_type == BOTH_UPLOAD)) {
-      wdg_status = this->uploadToWDG(filePath, fileToUpload);
-      if (upload_type == BOTH_UPLOAD) {
-        fileToUpload = SD.open(filePath);
-        display.clearScreen();
-        if (wdg_status)
-          display.drawCenteredText("WDG Upload Success", true);
-        else
-          display.drawCenteredText("WDG Upload Failed", true);
-
-        delay(2000);
-      }
-    }
-
-    if (millis() - timeout > 5000)
-      Logger::log(WARN_MSG, "Timeout reached");
-    if (!client->connected())
-      Logger::log(WARN_MSG, "Client disconnected");
-      
-  client->stop();
-
-  String respTrunc = response.length() > 200 ? response.substring(0, 200) : response;
-  Logger::log(STD_MSG, "[WIGLE] Response: " + respTrunc);
-
-  bool wigle_ok = true;
+    display.clearScreen();
+    display.drawCenteredText(filePath + " not found", true);
+    Logger::log(WARN_MSG, "File does not exist: " + filePath);
+    return false;
+  }
 
   if (upload_type == WDG_UPLOAD)
     return this->wdgwarsUpload(filePath);
 
   if (upload_type == BOTH_UPLOAD) {
     bool wdg_ok = this->wdgwarsUpload(filePath);
-    return wigle_ok && wdg_ok;
+    File fileToUpload = SD.open(filePath);
+    bool wigle_ok = this->uploadToWigle(filePath, fileToUpload);
+    display.clearScreen();
+    display.drawCenteredText(wigle_ok ? "WiGLE OK" : "WiGLE Failed", true);
+    delay(1500);
+    return wdg_ok && wigle_ok;
   }
 
-  return wigle_ok; // WIGLE_UPLOAD only
+  // WIGLE_UPLOAD
+  File fileToUpload = SD.open(filePath);
+  bool wigle_ok = this->uploadToWigle(filePath, fileToUpload);
+  display.clearScreen();
+  display.drawCenteredText(wigle_ok ? "WiGLE OK" : "WiGLE Failed", true);
+  delay(1500);
+  return wigle_ok;
 }
 
 // ============================================================

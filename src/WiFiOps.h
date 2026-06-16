@@ -23,6 +23,7 @@
 #include "mbedtls/sha256.h"
 
 #include <NimBLEDevice.h> // 2.3.0
+#include "flock.h"
 
 extern GpsInterface gps;
 extern SDInterface sd_obj;
@@ -122,7 +123,7 @@ class WiFiOps
     String user_ap_password = "";
     String wigle_user = "";
     String wigle_token = "";
-    String wdg_token = "";
+    String wdg_token   = "";
 
     bool connected_as_client = false;
 
@@ -150,6 +151,7 @@ class WiFiOps
     int touchNode(const uint8_t* mac, bool& isNewNode);
     uint8_t getNodeStartChannel(uint8_t slot);
     uint8_t getNodeEndChannel(uint8_t slot);
+    uint8_t getActiveNodeCount();
     void showCountdown();
     int runWardrive(uint32_t currentTime);
     void scanBLE();
@@ -241,9 +243,9 @@ class WiFiOps
     void initWiFi(bool set_country = false);
     void deinitBLE();
     void deinitWiFi();
-    uint8_t getActiveNodeCount();
     bool tryConnectToWiFi(unsigned long timeoutMs = STATION_CONNECT_TIMEOUT);
     bool backendUpload(String filePath, uint8_t upload_type = WIGLE_UPLOAD);
+    bool uploadToWigle(String filePath, File fileToUpload);
 
 
     // --------------------------------------------------------
