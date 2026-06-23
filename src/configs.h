@@ -27,6 +27,10 @@
 #define FIRMWARE_VERSION "v2.1.3"
 #define DEVICE_NAME      "JCMK C5 Wardriver"
 
+//// BLE stuff
+#define BLE_SCAN_DURATION   1 * 2500 // 2.5 seconds — longer dwell improves Flock/Raven capture odds (was 500ms)
+#define FLOCK_DEDUP_WINDOW_MS (5UL * 60UL * 1000UL) // 5 minutes — same MAC seen again within this window doesn't re-increment flock_count
+
 //// Role stuff
 #define SOLO
 // #define CORE
@@ -51,9 +55,6 @@
 
 #define ENOW_KEY_MAX_LEN 32
 #define ENOW_TEXT_MAX    200
-
-//// BLE stuff
-#define BLE_SCAN_DURATION   1 * 500 // 0.5 second
 
 
 //// LED stuff
@@ -114,6 +115,7 @@
 #define GPS_SERIAL_INDEX 1
 #define TX_TO_GPS 13
 #define RX_TO_GPS 14
+#define GPS_STATUS_LOG_INTERVAL_MS (15UL * 1000UL) // periodic [GPS] sats/fix/enabled status line
 
 
 //// SD stuff
@@ -126,6 +128,19 @@
 
 //// Debug log
 #define DEBUG_LOG_FILE "/debug.log"
+
+//// Weak Flock/Raven match log — standard-SIG-UUID-only matches (180a,
+//// 1809, 1819) that aren't specific enough to drive flock_count on
+//// their own. Logged separately so debug.log doesn't get noisy with
+//// them, while still keeping a record of legacy 1.1.x Raven activity.
+#define FLOCK_WEAK_LOG_FILE "/flock_weak.log"
+
+//// Files that end in .log but are never eligible for WiGLE/WDG
+//// upload — diagnostic-only, not wardrive data. Checked by
+//// WiFiOps::isUploadExcludedFile(); add new exclusions here rather
+//// than in the upload/file-listing logic itself.
+#define UPLOAD_EXCLUDED_FILE_COUNT 2
+#define UPLOAD_EXCLUDED_FILES { "debug.log", "flock_weak.log" }
 
 
 //// Switch stuff

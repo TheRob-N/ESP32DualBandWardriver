@@ -661,5 +661,19 @@ void GpsInterface::main() {
   else if ((!nmea.isValid()) && (num_sat <= 0)) {
     this->setGPSInfo();
   }
+
+  // Periodic status line — independent of the fix/lost-fix transition
+  // messages above, which only fire once on change and go silent for
+  // the whole no-fix stretch otherwise. This gives visibility into
+  // sat count and module status the same way watching raw serial
+  // output would, without needing a serial connection.
+  uint32_t now = millis();
+  if (now - this->last_status_log_ms >= GPS_STATUS_LOG_INTERVAL_MS) {
+    this->last_status_log_ms = now;
+    char buf[80];
+    snprintf(buf, sizeof(buf), "[GPS] enabled=%d valid=%d sats=%d",
+             this->gps_enabled, nmea.isValid(), num_sat);
+    Logger::log(STD_MSG, String(buf));
+  }
 }
 #endif

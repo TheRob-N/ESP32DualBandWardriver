@@ -1,10 +1,12 @@
 #include "WiFiOps.h"
 #include "flock.h"
 #include "BatteryInterface.h"
+#include "Switches.h"
 #include "esp_task_wdt.h"
 
 extern BatteryInterface battery;
 extern bool g_force_display_redraw;
+extern Switches c_btn;
 
 static const uint8_t BROADCAST_MAC[6] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
 static const char MAGIC[4] = {'E','N','O','W'};
@@ -88,17 +90,23 @@ class scanCallbacks : public NimBLEScanCallbacks {
     extern WiFiOps wifi_ops;
 
     uint8_t macBytes[6];
+    utils.stringToMac(advertisedDevice->getAddress().toString().c_str(), macBytes);
+
+    // Flock Safety BLE detection — scoped to active wardriving only.
+    // Does NOT depend on GPS fix or SD card (those gate logging, not
+    // detection), but it must not fire in WIFI_STANDBY: standby-mode
+    // detection was deliberately reverted after introducing reboot
+    // instability, so this check has to match the same
+    // current_scan_mode == WIFI_WARDRIVING gate that runWardrive()
+    // itself uses in WiFiOps::main().
+    if (wifi_ops.getCurrentScanMode() == WIFI_WARDRIVING &&
+      wifi_ops.checkFlockBLE(advertisedDevice)) {
+      wifi_ops.triggerFlockAlert("BLE",
+                                 String(advertisedDevice->getAddress().toString().c_str()), macBytes);
+      }
 
     if (wifi_ops.run_mode == SOLO_MODE) {
       if ((gps.getGpsModuleStatus()) && (gps.getFixStatus()) && (sd_obj.supported)) {
-        
-        utils.stringToMac(advertisedDevice->getAddress().toString().c_str(), macBytes);
-
-    // Flock Safety BLE detection — fire regardless of GPS/SD state
-    if (wifi_ops.checkFlockBLE(advertisedDevice)) {
-      wifi_ops.triggerFlockAlert("BLE",
-        String(advertisedDevice->getAddress().toString().c_str()));
-    }
 
         if (wifi_ops.seen_mac(macBytes))
           return;
@@ -1220,21 +1228,29 @@ uint32_t WiFiOps::getCurrentBLECount() {
 // Flock Safety detection
 // ============================================================
 bool WiFiOps::checkFlockBLE(const NimBLEAdvertisedDevice* device) {
+  // NOTE: this function can run on the NimBLE host task (called from
+  // onDiscovered). It must never call Logger::log() directly — use
+  // queueFlockLog() instead, which just writes a fixed-size buffer and
+  // defers the actual Serial/SD work to the main loop via flushFlockLog().
+  char logbuf[FLOCK_LOG_MSG_LEN];
+
   // 1. OUI prefix match
   uint8_t mac[6];
   utils.stringToMac(device->getAddress().toString().c_str(), mac);
   if (flockOUIMatch(mac, FLOCK_BLE_OUIS, FLOCK_BLE_OUI_COUNT)) {
-    Logger::log(WARN_MSG, "[FLOCK] BLE OUI match: " +
-                String(device->getAddress().toString().c_str()));
+    snprintf(logbuf, sizeof(logbuf), "[FLOCK] BLE OUI match: %s",
+             device->getAddress().toString().c_str());
+    this->queueFlockLog(logbuf);
     return true;
   }
 
   // 2. Device name match (case-sensitive substring)
   if (device->haveName()) {
-    String name = String(device->getName().c_str());
+    std::string name = device->getName();
     for (int i = 0; i < FLOCK_BLE_NAME_COUNT; i++) {
-      if (name.indexOf(FLOCK_BLE_NAMES[i]) >= 0) {
-        Logger::log(WARN_MSG, "[FLOCK] BLE name match: " + name);
+      if (name.find(FLOCK_BLE_NAMES[i]) != std::string::npos) {
+        snprintf(logbuf, sizeof(logbuf), "[FLOCK] BLE name match: %s", name.c_str());
+        this->queueFlockLog(logbuf);
         return true;
       }
     }
@@ -1246,8 +1262,47 @@ bool WiFiOps::checkFlockBLE(const NimBLEAdvertisedDevice* device) {
     if (mfgr.size() >= 2) {
       uint16_t company_id = (uint8_t)mfgr[0] | ((uint8_t)mfgr[1] << 8);
       if (company_id == FLOCK_BLE_MFGR_ID) {
-        Logger::log(WARN_MSG, "[FLOCK] BLE manufacturer ID match: 0x09C8");
+        this->queueFlockLog("[FLOCK] BLE manufacturer ID match: 0x09C8");
         return true;
+      }
+    }
+  }
+
+  // 4. Raven GATT service UUID match (SoundThinking/ShotSpotter Raven)
+  if (device->haveServiceUUID()) {
+    int uuidCount = device->getServiceUUIDCount();
+    bool weak_match_found = false;
+
+    for (int i = 0; i < uuidCount; i++) {
+      NimBLEUUID advUUID = device->getServiceUUID(i);
+
+      // Strong: non-standard, Raven-version-specific UUIDs (3100-3500).
+      // A match here is specific enough to count on its own.
+      for (int j = 0; j < FLOCK_RAVEN_UUID_STRONG_COUNT; j++) {
+        NimBLEUUID ravenUUID(FLOCK_RAVEN_UUIDS_STRONG[j]);
+        if (advUUID.equals(ravenUUID)) {
+          snprintf(logbuf, sizeof(logbuf), "[FLOCK] BLE Raven UUID match (strong): %s",
+                   advUUID.toString().c_str());
+          this->queueFlockLog(logbuf);
+          return true;
+        }
+      }
+
+      // Weak: standard Bluetooth SIG UUIDs (180a, 1809, 1819) also used
+      // by Raven, but too common on ordinary BLE devices to count alone.
+      // Logged separately, doesn't return true.
+      if (!weak_match_found) {
+        for (int j = 0; j < FLOCK_RAVEN_UUID_WEAK_COUNT; j++) {
+          NimBLEUUID ravenUUID(FLOCK_RAVEN_UUIDS_WEAK[j]);
+          if (advUUID.equals(ravenUUID)) {
+            char notebuf[48];
+            snprintf(notebuf, sizeof(notebuf), "[FLOCK] BLE Raven UUID match (weak): %s",
+                     advUUID.toString().c_str());
+            this->queueFlockWeakLog(device->getAddress().toString().c_str(), notebuf);
+            weak_match_found = true;
+            break;
+          }
+        }
       }
     }
   }
@@ -1257,25 +1312,144 @@ bool WiFiOps::checkFlockBLE(const NimBLEAdvertisedDevice* device) {
 
 bool WiFiOps::checkFlockWiFi(const uint8_t* mac) {
   if (flockOUIMatch(mac, FLOCK_WIFI_OUIS, FLOCK_WIFI_OUI_COUNT)) {
-    Logger::log(WARN_MSG, "[FLOCK] WiFi OUI match");
+    this->queueFlockLog("[FLOCK] WiFi OUI match");
     return true;
   }
   return false;
 }
 
-void WiFiOps::triggerFlockAlert(const String& type, const String& mac) {
+void WiFiOps::queueFlockLog(const char* msg) {
+  // Safe to call from the NimBLE host task: plain fixed-size buffer
+  // write, no heap allocation, no Serial/SD access.
+  strncpy(this->flock_log_msg, msg, FLOCK_LOG_MSG_LEN - 1);
+  this->flock_log_msg[FLOCK_LOG_MSG_LEN - 1] = '\0';
+  this->flock_log_pending = true;
+}
+
+void WiFiOps::queueFlockWeakLog(const char* mac_str, const char* note) {
+  // Same callback-safety rules as queueFlockLog(): snprintf into a
+  // fixed-size buffer, no heap allocation. gps.getLat()/getLon()/
+  // getDatetime() are safe to call here — they just return cached
+  // String members already built on the main loop task (no new
+  // concatenation happens inside the getters themselves), and
+  // gps.getAlt()/getAccuracy() are plain floats.
+  //
+  // Row format matches wardrive.log's WigleWifi-1.4 columns, plus a
+  // 12th Note field carrying the weak-match detail:
+  //   MAC,SSID,AuthMode,FirstSeen,Channel,RSSI,Lat,Lon,Alt,Acc,Type,Note
+  // SSID/Channel/RSSI are left blank/0 — this isn't a real wardrive
+  // entry, just a position-tagged record of where a weak match fired.
+  snprintf(this->flock_weak_log_msg, FLOCK_WEAK_LOG_MSG_LEN,
+           "%s,,[BLE],%s,0,0,%s,%s,%.2f,%.2f,BLE,%s",
+           mac_str,
+           gps.getDatetime().c_str(),
+           gps.getLat().c_str(),
+           gps.getLon().c_str(),
+           gps.getAlt(),
+           gps.getAccuracy(),
+           note);
+  this->flock_weak_log_pending = true;
+}
+
+void WiFiOps::flushFlockLog() {
+  // Call only from the main Arduino loop task.
+  if (this->flock_log_pending) {
+    this->flock_log_pending = false;
+    Logger::log(WARN_MSG, String(this->flock_log_msg));
+  }
+
+  // Weak Raven UUID matches go to their own CSV file instead of
+  // debug.log, via a direct SD write (same pattern Logger::log() uses
+  // internally) so they don't get mixed in with general debug output
+  // and carry the same position/time context as a real wardrive entry.
+  if (this->flock_weak_log_pending) {
+    this->flock_weak_log_pending = false;
+    #ifdef HAS_SD
+    if (sd_obj.supported) {
+      // Write the header once — guard on file not existing yet (or
+      // being empty), same idea as startLog()'s header write for
+      // wardrive.log, just without the rolling/sidecar machinery this
+      // side file doesn't need.
+      bool need_header = !SD.exists(FLOCK_WEAK_LOG_FILE);
+      if (!need_header) {
+        File check = SD.open(FLOCK_WEAK_LOG_FILE, FILE_READ);
+        if (check) {
+          need_header = (check.size() == 0);
+          check.close();
+        }
+      }
+      File f = SD.open(FLOCK_WEAK_LOG_FILE, FILE_APPEND);
+      if (f) {
+        if (need_header) {
+          f.println("MAC,SSID,AuthMode,FirstSeen,Channel,RSSI,"
+                     "CurrentLatitude,CurrentLongitude,AltitudeMeters,"
+                     "AccuracyMeters,Type,Note");
+        }
+        f.println(String(this->flock_weak_log_msg));
+        f.close();
+      }
+    }
+    #endif
+    // Still surface on Serial for live visibility, same as Logger::log().
+    Serial.println(String("[-] ") + this->flock_weak_log_msg);
+  }
+}
+
+bool WiFiOps::flockRecentlySeen(const uint8_t* mac_bytes) {
+  // Safe to call from the NimBLE host task: fixed-size array scan,
+  // no allocation, no I/O. Returns true (and refreshes the timestamp)
+  // if this MAC was already counted within FLOCK_DEDUP_WINDOW_MS.
+  // Otherwise claims a slot (oldest/unused first) and returns false,
+  // so the caller knows to count it as a new encounter.
+  uint32_t now = millis();
+  int oldest_idx = 0;
+  uint32_t oldest_ts = 0xFFFFFFFF;
+
+  for (uint8_t i = 0; i < FLOCK_DEDUP_SLOTS; i++) {
+    if (this->flock_seen[i].used &&
+        memcmp(this->flock_seen[i].mac, mac_bytes, 6) == 0) {
+      bool within_window = (now - this->flock_seen[i].last_seen_ms) < FLOCK_DEDUP_WINDOW_MS;
+      this->flock_seen[i].last_seen_ms = now; // refresh either way
+      return within_window;
+    }
+    if (!this->flock_seen[i].used) {
+      oldest_idx = i;
+      oldest_ts  = 0;
+    } else if (this->flock_seen[i].last_seen_ms < oldest_ts) {
+      oldest_idx = i;
+      oldest_ts  = this->flock_seen[i].last_seen_ms;
+    }
+  }
+
+  memcpy(this->flock_seen[oldest_idx].mac, mac_bytes, 6);
+  this->flock_seen[oldest_idx].used         = true;
+  this->flock_seen[oldest_idx].last_seen_ms = now;
+  return false;
+}
+
+void WiFiOps::triggerFlockAlert(const String& type, const String& mac, const uint8_t* mac_bytes) {
+  if (this->flockRecentlySeen(mac_bytes)) {
+    // Same camera, still in range / re-advertising — don't re-count,
+    // but still nudge flock_detected so the UI knows it's still active.
+    this->flock_detected  = true;
+    this->flock_last_type = type;
+    return;
+  }
+
   this->flock_count++;
   this->flock_detected  = true;
   this->flock_last_type = type;
-  Logger::log(WARN_MSG, "[FLOCK] ALERT! " + type + " | " + mac +
-              " | total: " + String(this->flock_count));
+  // NOTE: do not call Logger::log() here — this can run on the NimBLE
+  // host task (via onDiscovered) where Serial/SD/heap access is unsafe.
+  char buf[FLOCK_LOG_MSG_LEN];
+  snprintf(buf, sizeof(buf), "[FLOCK] ALERT! %s | %s | total: %lu",
+           type.c_str(), mac.c_str(), (unsigned long)this->flock_count);
+  this->queueFlockLog(buf);
 }
 
 void WiFiOps::scanBLE() {
-  //Logger::log(STD_MSG, "Starting BLE scan...");
   pBLEScan->clearResults();
   pBLEScan->start(BLE_SCAN_DURATION, false, false);
-  //Logger::log(STD_MSG, "Completed BLE scan");
 }
 
 int WiFiOps::runWardrive(uint32_t currentTime) {
@@ -1538,6 +1712,19 @@ bool WiFiOps::isSSIDExcluded(const String& ssid,
   return false;
 }
 
+bool WiFiOps::isUploadExcludedFile(const String& filename) {
+  // Strip any leading slash so this matches regardless of whether the
+  // caller passed a bare name (file.name()) or a full path ("/foo.log").
+  String name = filename;
+  if (name.startsWith("/")) name = name.substring(1);
+
+  static const char* excluded[] = UPLOAD_EXCLUDED_FILES;
+  for (int i = 0; i < UPLOAD_EXCLUDED_FILE_COUNT; i++) {
+    if (name == excluded[i]) return true;
+  }
+  return false;
+}
+
 void WiFiOps::processWardrive(uint16_t networks) {
   String display_string;
   bool do_save;
@@ -1570,7 +1757,7 @@ void WiFiOps::processWardrive(uint16_t networks) {
 
       // Flock Safety WiFi OUI detection
       if (this->checkFlockWiFi(this_bssid_raw)) {
-        this->triggerFlockAlert("WiFi", String(this_bssid));
+        this->triggerFlockAlert("WiFi", String(this_bssid), this_bssid_raw);
       }
 
       if (this->run_mode == SOLO_MODE) {
@@ -1936,9 +2123,9 @@ void WiFiOps::startAccessPoint() {
 }
 
 bool WiFiOps::uploadToWigle(String filePath, File fileToUpload) {
-  Logger::log(STD_MSG, "Uploading to WiGLE...");
+  Logger::log(STD_MSG, "WiGLE Uploading...");
   display.clearScreen();
-  display.drawCenteredText("Uploading to WiGLE...", true);
+  display.drawCenteredText("WiGLE Uploading...", true);
 
   // Load credentials
   String username = settings.loadSetting<String>("wu");
@@ -2137,7 +2324,7 @@ void WiFiOps::writeSidecar(String filePath, String service) {
 // Mirrors backendUpload() but uses X-API-Key auth and wdgwars.pl endpoint.
 bool WiFiOps::wdgwarsUpload(String filePath) {
   display.clearScreen();
-  display.drawCenteredText("WDG Upload...", true);
+  display.drawCenteredText("WDG Uploading...", true);
   delay(100);
 
   if (!SD.exists(filePath)) {
@@ -2316,7 +2503,7 @@ void WiFiOps::uploadAllPending() {
   while (f) {
     if (!f.isDirectory()) {
       String name = f.name();
-      if (name.endsWith(".log") && name != "debug.log") {
+      if (name.endsWith(".log") && !this->isUploadExcludedFile(name)) {
         String path = "/" + name;
         bool wigle_done = this->sidecarExists(path, "wigle");
         bool wdg_done   = this->sidecarExists(path, "wdg");
@@ -2480,7 +2667,7 @@ void WiFiOps::serveConfigPage() {
       while (file) {
         if (!file.isDirectory()) {
           String filename = file.name();
-          if (filename.endsWith(".log") && filename != "debug.log") {
+          if (filename.endsWith(".log") && !this->isUploadExcludedFile(filename)) {
             // Check sidecar upload status
             bool wigleDone = SD.exists("/" + filename + ".wigle");
             bool wdgDone   = SD.exists("/" + filename + ".wdg");
@@ -2783,6 +2970,14 @@ bool WiFiOps::monitorAP(unsigned long timeoutMs) {
     if (WiFi.softAPgetStationNum() > 0) {
       Logger::log(GUD_MSG, "Client connected.");
       return true;
+    }
+    // Center-button bypass: skip the rest of the wait and go straight
+    // to wardriving instead of sitting out the full WEB_PAGE_TIMEOUT
+    // when K1T isn't in range and nobody's connecting to the AP.
+    if (c_btn.justPressed()) {
+      Logger::log(STD_MSG, "[AP] Bypassed by center button — skipping wait.");
+      shutdownAccessPoint();
+      return false;
     }
   }
 
@@ -3207,6 +3402,11 @@ void WiFiOps::departDock() {
 // ============================================================
 
 void WiFiOps::main(uint32_t currentTime) {
+  // Drain any Flock match log queued by the NimBLE host callback
+  // (onDiscovered runs on a different task — see queueFlockLog()).
+  // Must happen before any early returns below so it's never skipped.
+  this->flushFlockLog();
+
   // Chunk 6: dock mode takes priority over normal wardrive cycle
   if (this->dock_state != DOCK_STATE_NONE) {
     this->runDockMode(currentTime);

@@ -161,6 +161,7 @@ class WiFiOps
     void processWardrive(uint16_t networks);
     void shutdownAccessPoint(bool ap_active = true);
     bool isSSIDExcluded(const String& ssid, const String* list, int count); // Chunk 4
+    bool isUploadExcludedFile(const String& filename); // debug.log, flock_weak.log, etc — see configs.h
 
     // --------------------------------------------------------
     // Chunk 5: Geofence private members
@@ -217,7 +218,48 @@ class WiFiOps
     String   flock_last_type = "";
     bool     checkFlockBLE(const NimBLEAdvertisedDevice* device);
     bool     checkFlockWiFi(const uint8_t* mac);
-    void     triggerFlockAlert(const String& type, const String& mac);
+    void     triggerFlockAlert(const String& type, const String& mac, const uint8_t* mac_bytes);
+
+    // Dedup so a single camera seen repeatedly (many BLE adverts, or the
+    // same WiFi BSSID re-appearing across scan cycles) only increments
+    // flock_count once per FLOCK_DEDUP_WINDOW_MS, instead of once per
+    // packet/scan. Plain fixed-size array — safe to touch from the
+    // NimBLE host callback (no allocation, no I/O).
+    static const uint8_t FLOCK_DEDUP_SLOTS = 8;
+    struct FlockSeenEntry {
+      uint8_t  mac[6]    = {0};
+      bool     used      = false;
+      uint32_t last_seen_ms = 0;
+    };
+    FlockSeenEntry flock_seen[FLOCK_DEDUP_SLOTS];
+    bool     flockRecentlySeen(const uint8_t* mac_bytes); // checks + updates table
+
+    // Deferred logging for Flock matches found inside the NimBLE host
+    // callback (onDiscovered runs on NimBLE's own task — it must never
+    // call Logger::log() directly, since that can hit Serial/SD/heap
+    // work from a context that isn't safe for it and has caused hard
+    // lockups during continuous scanning). The callback only sets these
+    // plain fixed-size fields; WiFiOps::main() drains and logs them on
+    // the normal Arduino loop task.
+    static const uint8_t FLOCK_LOG_MSG_LEN = 64;
+    volatile bool    flock_log_pending = false;
+    char             flock_log_msg[FLOCK_LOG_MSG_LEN] = {0};
+    void     queueFlockLog(const char* msg);
+    void     flushFlockLog();
+
+    // Separate deferred buffer for weak Raven UUID matches (standard
+    // SIG UUIDs — see flock.h). Kept distinct from flock_log_msg above
+    // so a strong match and a weak match arriving in the same callback
+    // window don't overwrite each other before flushFlockLog() drains
+    // them. Written to FLOCK_WEAK_LOG_FILE, not debug.log, and never
+    // touches flock_count/F:. Sized for a full WigleWifi-style CSV row
+    // (MAC,SSID,AuthMode,FirstSeen,Channel,RSSI,Lat,Lon,Alt,Acc,Type,Note)
+    // rather than just a short message, so the weak log carries the
+    // same position/time context as a real wardrive entry.
+    static const uint16_t FLOCK_WEAK_LOG_MSG_LEN = 160;
+    volatile bool    flock_weak_log_pending = false;
+    char             flock_weak_log_msg[FLOCK_WEAK_LOG_MSG_LEN] = {0};
+    void     queueFlockWeakLog(const char* mac_str, const char* note);
 
     uint8_t current_assignment_version = 1;
     uint8_t current_assigned_scan_idx = 0;

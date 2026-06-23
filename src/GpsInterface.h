@@ -103,6 +103,7 @@ class GpsInterface {
     bool good_fix = false;
     char nav_system='\0';
     uint8_t num_sats = 0;
+    uint32_t last_status_log_ms = 0; // for periodic [GPS] status line in main()
 
     type_t type_flag = GPSTYPE_NATIVE;
 

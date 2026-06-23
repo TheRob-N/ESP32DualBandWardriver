@@ -539,32 +539,12 @@ void UI::main(uint32_t currentTime) {
   if (wifi_ops.isDocked())
     return;
 
-  // ---- Flock alert overlay ----
-  if (wifi_ops.flock_detected) {
-    if (!this->flock_alert_showing) {
-      // New detection — start alert
-      this->flock_alert_showing  = true;
-      this->flock_alert_start_ms = currentTime;
-      this->flock_alert_last_sec = -1;
-      display.tft->setRotation(3);
-    }
-    // Reset timer on each new detection while alert is showing
-    wifi_ops.flock_detected = false;
-  }
-
-  if (this->flock_alert_showing) {
-    uint32_t elapsed = currentTime - this->flock_alert_start_ms;
-    if (elapsed < FLOCK_ALERT_DURATION_MS) {
-      this->drawFlockAlert(currentTime);
-      return; // hold screen — suppress all other drawing
-    } else {
-      // Alert expired — restore display
-      this->flock_alert_showing  = false;
-      this->flock_alert_last_sec = -1;
-      this->last_stat_display_mode = 255; // force redraw
-      this->lastUpdateTime = 0;
-    }
-  }
+  // ---- Flock detection: counted via flock_count, shown by the F:
+  // counter on Screen 1 (drawStatsNew) — no full-screen overlay. The
+  // overlay (setRotation + fillScreen takeover) was implicated in a
+  // hard lockup during continuous BLE scanning and has been removed;
+  // flock_detected is still set by triggerFlockAlert() but intentionally
+  // left unconsumed here.
 
   bool in_stats = (this->stat_display_mode != SD_FILES);
 

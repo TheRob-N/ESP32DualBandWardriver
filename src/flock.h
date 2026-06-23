@@ -109,17 +109,37 @@ static const int FLOCK_BLE_NAME_COUNT = 4;
 //   1.1.x (legacy):  00001809 + 00001819
 //   1.2.x:           0000180a + 00003100 + 00003200 + 00003300
 //   1.3.x (latest):  all of the above + 00003400 + 00003500
-static const char* FLOCK_RAVEN_UUIDS[] = {
-  "0000180a-0000-1000-8000-00805f9b34fb",  // Device Information (all versions)
+//
+// Split into "strong" and "weak" because three of these (180a, 1809,
+// 1819) are standard Bluetooth SIG-assigned service UUIDs that show up
+// on huge numbers of ordinary consumer BLE devices (phones, earbuds,
+// thermometers, fitness trackers) — matching on them alone produces
+// false positives in any BLE-dense environment (confirmed: a single
+// 180a match fired repeatedly during a home test with no Flock/Raven
+// hardware present). The other five (3100-3500) are non-standard,
+// Raven-version-specific UUIDs not otherwise in common use, so a
+// match there is a much more reliable signal on its own.
+//
+// Strong matches drive flock_count/F: directly. Weak matches are
+// written to their own log file (FLOCK_WEAK_LOG_FILE, not debug.log)
+// for visibility — useful for spotting legacy 1.1.x Raven units, which
+// only ever advertise the weak set — but don't increment the counter
+// by themselves. See checkFlockBLE() method 4 and flushFlockLog().
+static const char* FLOCK_RAVEN_UUIDS_STRONG[] = {
   "00003100-0000-1000-8000-00805f9b34fb",  // GPS Location (1.2.x+)
   "00003200-0000-1000-8000-00805f9b34fb",  // Power Management (1.2.x+)
   "00003300-0000-1000-8000-00805f9b34fb",  // Network Status (1.2.x+)
   "00003400-0000-1000-8000-00805f9b34fb",  // Upload Statistics (1.3.x)
   "00003500-0000-1000-8000-00805f9b34fb",  // Error/Failure (1.3.x)
-  "00001809-0000-1000-8000-00805f9b34fb",  // Health Thermometer (legacy 1.1.x)
-  "00001819-0000-1000-8000-00805f9b34fb",  // Location/Navigation (legacy 1.1.x)
 };
-static const int FLOCK_RAVEN_UUID_COUNT = 8;
+static const int FLOCK_RAVEN_UUID_STRONG_COUNT = 5;
+
+static const char* FLOCK_RAVEN_UUIDS_WEAK[] = {
+  "0000180a-0000-1000-8000-00805f9b34fb",  // Device Information — standard SIG UUID, low specificity
+  "00001809-0000-1000-8000-00805f9b34fb",  // Health Thermometer (legacy 1.1.x) — standard SIG UUID
+  "00001819-0000-1000-8000-00805f9b34fb",  // Location/Navigation (legacy 1.1.x) — standard SIG UUID
+};
+static const int FLOCK_RAVEN_UUID_WEAK_COUNT = 3;
 
 // ---- WiFi SSID patterns ----
 // Cameras sometimes beacon with recognizable SSID prefix
