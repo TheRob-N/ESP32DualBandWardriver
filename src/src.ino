@@ -78,6 +78,28 @@ void setup() {
   // Enable SD debug logging if setting is on
   Logger::enableSDLog(settings.loadSetting<bool>(DEBUG_LOG_NAME));
 
+  // Log the reset reason immediately after SD logging is enabled so it
+  // lands in debug.log. Critical for diagnosing mid-wardrive crashes —
+  // watchdog vs panic vs brownout each point to different root causes.
+  {
+    esp_reset_reason_t reason = esp_reset_reason();
+    const char* reason_str = "UNKNOWN";
+    switch (reason) {
+      case ESP_RST_POWERON:   reason_str = "POWERON";   break;
+      case ESP_RST_EXT:       reason_str = "EXT_PIN";   break;
+      case ESP_RST_SW:        reason_str = "SOFTWARE";  break;
+      case ESP_RST_PANIC:     reason_str = "PANIC";     break;
+      case ESP_RST_INT_WDT:   reason_str = "INT_WDT";   break;
+      case ESP_RST_TASK_WDT:  reason_str = "TASK_WDT";  break;
+      case ESP_RST_WDT:       reason_str = "WDT";       break;
+      case ESP_RST_DEEPSLEEP: reason_str = "DEEPSLEEP"; break;
+      case ESP_RST_BROWNOUT:  reason_str = "BROWNOUT";  break;
+      case ESP_RST_SDIO:      reason_str = "SDIO";      break;
+      default:                reason_str = "UNKNOWN";   break;
+    }
+    Logger::log(WARN_MSG, String("[BOOT] Reset reason: ") + reason_str);
+  }
+
   // Init battery
   battery.RunSetup();
   battery.battery_level = battery.getBatteryLevel();

@@ -168,7 +168,6 @@ class WiFiOps
     // --------------------------------------------------------
     GeofenceEntry geo_cache[MAX_GEOFENCES]; // parsed geofence entries
     bool          geo_cache_loaded  = false;
-    bool          geo_display_shown = false; // tracks TFT state to avoid redraw spam
 
     void  loadGeofenceCache();
     float haversineDistance(float lat1, float lon1,

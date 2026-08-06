@@ -1663,18 +1663,11 @@ bool WiFiOps::checkGeofences() {
                     String((int)(dist * 3.28084)) + "ft  rad=" +
                     String((int)(geo_cache[i].rad * 3.28084)) + "ft");
 
-        // Update TFT to show paused state
-        display.clearScreen();
-        display.tft->setCursor(0, 0);
-        display.tft->setTextColor(ST77XX_YELLOW, ST77XX_BLACK);
-        display.tft->println("GEOFENCE PAUSED");
-        display.tft->setTextColor(ST77XX_WHITE, ST77XX_BLACK);
-        int dist_ft = (int)(dist * 3.28084);
-        String dist_str = (dist_ft >= 528) ?
-          String(dist_ft / 5280.0f, 2) + "mi" :
-          String(dist_ft) + "ft";
-        display.tft->println(this->current_geo_label + " " + dist_str);
-        this->geo_display_shown = true;
+        // No dedicated full-screen draw here — the normal stats screen
+        // (ui.cpp drawStatsNew()) already shows the geofence label via
+        // wifi_ops.in_geofence/current_geo_label, so a separate
+        // "GEOFENCE PAUSED" screen would just be a second, competing
+        // place this state gets drawn.
       }
 
       return true;
@@ -1687,10 +1680,11 @@ bool WiFiOps::checkGeofences() {
                 this->current_geo_label + "\" — resuming wardrive");
     this->in_geofence       = false;
     this->current_geo_label = "";
-    this->geo_display_shown = false;
 
-    // Clear geofence display so normal UI can reclaim TFT
-    display.clearScreen();
+    // No clearScreen() needed — there's no dedicated geofence screen
+    // anymore. The normal stats screen (ui.cpp drawStatsNew()) redraws
+    // every loop and will naturally blank the GEO: label on its own
+    // once in_geofence is false, same as every other field there.
   }
 
   return false;
