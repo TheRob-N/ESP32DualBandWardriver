@@ -1,4 +1,6 @@
 #include "GpsInterface.h"
+#include <time.h>
+#include <sys/time.h>
 
 #ifdef HAS_GPS
 
@@ -475,8 +477,29 @@ void GpsInterface::setGPSInfo() {
 
   bool fix = nmea.isValid();
 
-  if ((fix) && (!this->good_fix))
+  if ((fix) && (!this->good_fix)) {
     Logger::log(GUD_MSG, "GPS acquired fix!");
+
+    // Set the ESP32 system clock from GPS time on first fix so that
+    // debug.log entries and any other time() callers get real wall-clock
+    // time rather than epoch. Only done once per fix acquisition —
+    // GPS time is accurate to the second so this is sufficient.
+    if (nmea.getYear() > 0) {
+      struct tm t = {};
+      t.tm_year = nmea.getYear() - 1900;
+      t.tm_mon  = nmea.getMonth() - 1;  // tm_mon is 0-indexed
+      t.tm_mday = nmea.getDay();
+      t.tm_hour = nmea.getHour();
+      t.tm_min  = nmea.getMinute();
+      t.tm_sec  = nmea.getSecond();
+      t.tm_isdst = 0;
+      time_t epoch = mktime(&t);
+      if (epoch != (time_t)-1) {
+        struct timeval tv = { .tv_sec = epoch, .tv_usec = 0 };
+        settimeofday(&tv, nullptr);
+      }
+    }
+  }
   else if ((!fix) && (this->good_fix))
     Logger::log(WARN_MSG, "GPS lost fix!");
 

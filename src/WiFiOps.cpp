@@ -1526,17 +1526,27 @@ int WiFiOps::runWardrive(uint32_t currentTime) {
         // Delete the scan data
         WiFi.scanDelete();
 
-        // Scan BLE here
-        if (current_assigned_scan_idx == assigned_start_idx)
-          this->scanBLE();
-
-        while(pBLEScan->isScanning())
-          delay(1);
+        // Scan BLE here — start() is non-blocking; NimBLE runs the
+        // scan on its own RTOS task for BLE_SCAN_DURATION ms and fires
+        // onDiscovered() callbacks as advertisements arrive. We no
+        // longer block the main loop with while(isScanning()) delay(1),
+        // which was freezing all other tasks (GPS, battery, SD flush)
+        // for 2.5s and causing heap corruption / hard resets in dense
+        // BLE environments. Both scans run concurrently — WiFi on the
+        // ESP32 radio and BLE on NimBLE's task — which is fine since
+        // they operate on different frequencies.
+        if (current_assigned_scan_idx == assigned_start_idx) {
+          if (!pBLEScan->isScanning())
+            this->scanBLE();
+        }
 
         if ((this->run_mode == NODE_MODE) && (current_assigned_scan_idx == assigned_start_idx))
           this->runAdminWindowAfterScanCycle();
 
-        // Start a new scan on all channels
+        // Start the next WiFi scan immediately — no need to wait for
+        // BLE to finish first since WiFi.scanNetworks(true,...) is also
+        // async. BLE results continue arriving via onDiscovered() while
+        // the WiFi scan runs.
         if (this->run_mode == NODE_MODE)
           this->startNextNodeAssignedScan();
         else
