@@ -1691,10 +1691,11 @@ bool WiFiOps::checkGeofences() {
     this->in_geofence       = false;
     this->current_geo_label = "";
 
-    // No clearScreen() needed — there's no dedicated geofence screen
-    // anymore. The normal stats screen (ui.cpp drawStatsNew()) redraws
-    // every loop and will naturally blank the GEO: label on its own
-    // once in_geofence is false, same as every other field there.
+    // There is no dedicated geofence screen any more, so nothing needs
+    // clearing — but drawStatsNew() only repaints fields whose value
+    // changed, so the stale GEO: label can sit there until some other
+    // stat happens to move. Force one full redraw instead.
+    g_force_display_redraw = true;
   }
 
   return false;
